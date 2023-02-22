@@ -2,13 +2,16 @@ package com.springbootproject.orderservice.service;
 
 import com.springbootproject.orderservice.model.Order;
 import com.springbootproject.orderservice.model.OrderLineItems;
+import com.springbootproject.orderservice.model.dto.InventoryResponse;
 import com.springbootproject.orderservice.model.dto.OrderLineItemsDTO;
 import com.springbootproject.orderservice.model.dto.OrderRequest;
 import com.springbootproject.orderservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -17,32 +20,46 @@ import java.util.UUID;
 public class OrderService {
     //@Autowired
     private final OrderRepository orderRepository;
-    public void placeOrder(OrderRequest orderRequest){
-        var order = new Order();
-        //Map OrderRequest to Order
+    private final WebClient webClient;
+    public void placeOrder(OrderRequest orderRequest) {
+        Order order = new Order();
         order.setOrderNumber(UUID.randomUUID().toString());
 
-        //map OrderItemsList from orderRequest to Order
-        //create a orderlineItems list from orderRequest
         List<OrderLineItems> orderLineItems = orderRequest.getOrderLineItemsDTOList()
                 .stream()
-                // can replace following line code with method references i.e. map(this::mapToDto)
                 .map(this::mapToDto)
                 .toList();
-        //set it to order's orderlineItemsList
-        order.setOrderLineItemsList(orderLineItems);
-        //call Inventory service and place Order
-        //check if the product is in stock
 
-        //Save his order into database
-        orderRepository.save(order);
+        order.setOrderLineItemsList(orderLineItems);
+
+        List<String> skuCodes = order.getOrderLineItemsList().stream()
+                .map(OrderLineItems::getSkuCode)
+                .toList();
+
+        // Call Inventory Service, and place order if product is in
+        // stock
+        InventoryResponse[] inventoryResponsArray = webClient.get()
+                .uri("http://localhost:8082/api/inventory",
+                        uriBuilder -> uriBuilder.queryParam("skuCode", skuCodes).build())
+                .retrieve()
+                .bodyToMono(InventoryResponse[].class)
+                .block();
+
+        boolean allProductsInStock = Arrays.stream(inventoryResponsArray)
+                .allMatch(InventoryResponse::isInStock);
+
+        if(allProductsInStock){
+            orderRepository.save(order);
+        } else {
+            throw new IllegalArgumentException("Product is not in stock, please try again later");
+        }
     }
-    //Create a finction that map OrderLineItemsDTO to orderLineItems
+    //Create a function that map OrderLineItemsDTO to orderLineItems
     public OrderLineItems mapToDto(OrderLineItemsDTO orderLineItemsDTO){
         //Create a new OrderLineItems obj
         OrderLineItems orderLineItems = new OrderLineItems();
         //Set the required fields to the orderLineItems obj
-        orderLineItems.setSkuCoode(orderLineItemsDTO.getSkuCode());
+        orderLineItems.setSkuCode(orderLineItemsDTO.getSkuCode());
         orderLineItems.setPrice(orderLineItemsDTO.getPrice());
         orderLineItems.setQuantity(orderLineItemsDTO.getQuantity());
         return orderLineItems;
